@@ -1,4 +1,5 @@
 streamlit
 edge-tts
 pydub
+audioop-lts
 pdfplumber
