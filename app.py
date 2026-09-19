@@ -178,15 +178,14 @@ def parse_pdf(file_bytes):
 
 async def generate_speech(client, text, reference_id):
     """Generates MP3 audio buffer using Fish Audio Async SDK."""
-    audio_data = bytearray()
-    async for chunk in client.tts.convert(
+    # Option 1: Direct await (returns complete audio bytes)
+    audio_bytes = await client.tts.convert(
         text=text,
         reference_id=reference_id,
         format="mp3",
         latency="balanced"
-    ):
-        audio_data.extend(chunk)
-    return bytes(audio_data)
+    )
+    return audio_bytes
 
 async def compile_table_read(script_lines, voice_assignments, api_key, progress_bar):
     """Generates audio for each line and stitches raw MP3 byte streams directly."""
