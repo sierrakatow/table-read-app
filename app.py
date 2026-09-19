@@ -12,15 +12,7 @@ st.title("🎭 Multi-Voice Screenplay Table Read")
 st.write("Upload a script (.fdx or .pdf) to synthesize a multi-voice audio table read using ElevenLabs.")
 
 # --- API KEY MANAGEMENT ---
-st.sidebar.title("⚙️ Settings")
-api_key = st.sidebar.text_input(
-    "ElevenLabs API Key", 
-    type="password", 
-    value=st.secrets.get("ELEVENLABS_API_KEY", "")
-)
-
-if not api_key:
-    st.sidebar.warning("⚠️ Enter your ElevenLabs API key to enable speech generation.")
+api_key = st.secrets.get("ELEVENLABS_API_KEY", "")
 
 # --- ELEVENLABS DEFAULT VOICE IDs ---
 # These are popular pre-made stock voices available on free & paid ElevenLabs accounts
