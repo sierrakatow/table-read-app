@@ -1,19 +1,18 @@
 import streamlit as st
-from lxml import etree
+import xml.etree.ElementTree as ET
 import pdfplumber
 import asyncio
 import edge_tts
 import io
 import os
 import re
-from pydub import AudioSegment
 
 st.set_page_config(page_title="Table Read AI", page_icon="🎭", layout="centered")
 
 st.title("🎭 Multi-Voice Screenplay Table Read")
 st.write("Upload a script (.fdx or .pdf) to automatically assign voices and perform a full audio table read.")
 
-# 1. Hardcoded regular cast
+# Hardcoded regular cast
 DEFAULT_VOICES = {
     "NARRATOR": "en-US-GuyNeural",
     "CHARLES": "en-GB-RyanNeural",
@@ -43,32 +42,46 @@ DEFAULT_NARRATOR_VOICE = "en-US-ChristopherNeural"
 
 # --- HELPER PARSERS ---
 
+def repair_truncated_xml(raw_bytes):
+    """Attempts to fix incomplete XML by appending missing closing tags."""
+    content = raw_bytes.decode('utf-8', errors='ignore')
+    content = re.sub(r'<[^>]*$', '', content)
+    
+    open_tags = re.findall(r'<([a-zA-Z0-9_]+)(?:\s+[^/>]*)?>', content)
+    close_tags = re.findall(r'</([a-zA-Z0-9_]+)>', content)
+    
+    stack = []
+    for tag in open_tags:
+        stack.append(tag)
+        
+    for tag in close_tags:
+        if tag in stack:
+            stack.remove(tag)
+            
+    for tag in reversed(stack):
+        content += f"</{tag}>"
+        
+    return content.encode('utf-8')
+
+
 def parse_fdx(file_bytes):
-    """
-    Parses Final Draft XML structure into sequential lines.
-    Uses a recovering XML parser first, with a regex fallback for severely broken/truncated XML files.
-    """
+    """Parses Final Draft XML structure into sequential lines."""
     script_lines = []
     is_partial = False
 
-    # Check if the document was truncated near the end
     if b'</FinalDraft>' not in file_bytes[-100:]:
         is_partial = True
 
-    # Attempt 1: Recovering XML Parser (lxml)
     try:
-        parser = etree.XMLParser(recover=True, encoding='utf-8')
-        root = etree.fromstring(file_bytes, parser=parser)
+        repaired_bytes = repair_truncated_xml(file_bytes)
+        root = ET.fromstring(repaired_bytes)
         
         current_speaker = None
-        
-        # Support both standard Final Draft schemas (<Paragraph> and <Element>)
-        elements = root.xpath('.//Paragraph') or root.xpath('.//Element')
+        elements = root.findall(".//Paragraph") or root.findall(".//Element")
         
         for element in elements:
             element_type = element.get("Type")
-            text_nodes = element.xpath('.//Text/text()') or element.xpath('.//text()')
-            text = "".join(text_nodes).strip()
+            text = "".join(element.itertext()).strip()
             
             if not text:
                 continue
@@ -85,11 +98,9 @@ def parse_fdx(file_bytes):
         return script_lines, is_partial
 
     except Exception:
-        # Attempt 2: Regex Fallback for severely broken XML strings
         is_partial = True
         content_str = file_bytes.decode('utf-8', errors='ignore')
         
-        # Extract Paragraph/Element blocks
         pattern = re.compile(
             r'<(?:Paragraph|Element)[^>]*Type="(?P<type>[^"]+)"[^>]*>(.*?)(?=</(?:Paragraph|Element)>|<(?:Paragraph|Element)|$)', 
             re.DOTALL
@@ -102,7 +113,6 @@ def parse_fdx(file_bytes):
             element_type = match.group('type')
             body = match.group(2)
             
-            # Extract internal text tags or fallback to strip tags
             texts = text_pattern.findall(body)
             if texts:
                 text = "".join(texts).strip()
@@ -165,8 +175,8 @@ async def generate_speech(text, voice):
     return bytes(audio_data)
 
 async def compile_table_read(script_lines, voice_assignments, progress_bar):
-    """Generates audio for each line and stitches them into a single track."""
-    combined_audio = AudioSegment.empty()
+    """Generates audio for each line and stitches raw MP3 byte streams directly."""
+    combined_audio = bytearray()
     total_lines = len(script_lines)
     
     for idx, line in enumerate(script_lines):
@@ -176,16 +186,13 @@ async def compile_table_read(script_lines, voice_assignments, progress_bar):
         
         try:
             audio_bytes = await generate_speech(text, voice)
-            segment = AudioSegment.from_file(io.BytesIO(audio_bytes), format="mp3")
-            combined_audio += segment + AudioSegment.silent(duration=300) # 300ms pause between lines
+            combined_audio.extend(audio_bytes)
         except Exception as e:
             st.warning(f"Skipped line {idx+1} due to synthesis error: {e}")
             
         progress_bar.progress((idx + 1) / total_lines)
         
-    out_buffer = io.BytesIO()
-    combined_audio.export(out_buffer, format="mp3")
-    return out_buffer.getvalue()
+    return bytes(combined_audio)
 
 # --- APP INTERFACE ---
 
@@ -211,14 +218,12 @@ if uploaded_file:
         else:
             st.success(f"Parsed {len(script_lines)} lines!")
         
-        # Extract unique characters excluding Narrator
         detected_characters = sorted(list(set(l["speaker"] for l in script_lines if l["speaker"] != "NARRATOR")))
         
         st.subheader("🎙️ Character Voice Assignments")
         
         assigned_voices = {}
 
-        # Narrator Selection
         assigned_voices["NARRATOR"] = st.selectbox(
             "Narrator (Action & Sluglines)", 
             options=list(AVAILABLE_VOICES.values()),
@@ -226,12 +231,10 @@ if uploaded_file:
             index=1
         )
         
-        # Dynamic Character Voice Matching
         voice_options = list(AVAILABLE_VOICES.values())
         for idx, character in enumerate(detected_characters):
             char_upper = character.upper().strip()
             
-            # Check if character is in hardcoded DEFAULT_VOICES
             if char_upper in DEFAULT_VOICES:
                 default_voice_code = DEFAULT_VOICES[char_upper]
                 assigned_voices[character] = default_voice_code
@@ -246,13 +249,11 @@ if uploaded_file:
                     key=f"voice_{character}"
                 )
 
-        # Generate Table Read
         if st.button("▶️ Generate Table Read"):
             progress_bar = st.progress(0.0)
             status_text = st.empty()
             status_text.text("Synthesizing character voices...")
             
-            # Run Async TTS in Event Loop
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             final_audio_bytes = loop.run_until_complete(
