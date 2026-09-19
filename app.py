@@ -13,6 +13,20 @@ st.set_page_config(page_title="Table Read AI", page_icon="🎭", layout="centere
 st.title("🎭 Multi-Voice Screenplay Table Read")
 st.write("Upload a 37-page TV script (.fdx or .pdf) to automatically assign voices and perform a full audio table read.")
 
+# 1. Define your hardcoded regular cast
+DEFAULT_VOICES = {
+    "NARRATOR": "en-US-GuyNeural",
+    "CHARLES": "en-GB-RyanNeural",
+    "LIZ": "en-US-JennyNeural",
+    "MAX": "en-US-ChristopherNeural",
+    "EMMA": "en-US-AriaNeural",
+    "JESSE": "en-US-EricNeural",
+    "PHYLLIS": "en-US-AnaNeural",
+    "MORT": "en-US-RogerNeural",
+    "HENRY": "en-US-SteffanNeural",
+    "STEVE": "en-US-RogerNeural"
+}
+
 # Standard default Edge TTS voices
 AVAILABLE_VOICES = {
     "Male - US (Guy)": "en-US-GuyNeural",
@@ -24,6 +38,29 @@ AVAILABLE_VOICES = {
     "Female - UK (Sonia)": "en-GB-SoniaNeural",
     "Female - AU (Natasha)": "en-AU-NatashaNeural",
 }
+
+# 3. Dynamic UI logic inside Streamlit
+assigned_voices = {}
+
+st.subheader("Character Voice Assignments")
+
+for character in detected_characters:
+    # Normalize character name for matching
+    char_upper = character.upper().strip()
+    
+    # Check if character is hardcoded
+    if char_upper in DEFAULT_VOICES:
+        default_voice_code = DEFAULT_VOICES[char_upper]
+        assigned_voices[character] = default_voice_code
+        st.write(f"🔒 **{character}** → Automatically locked to `{default_voice_code}`")
+    else:
+        # Fallback to manual selection dropdown for guest stars
+        selected_label = st.selectbox(
+            f"Select voice for {character}:",
+            options=list(AVAILABLE_VOICES.keys()),
+            key=f"voice_{character}"
+        )
+        assigned_voices[character] = AVAILABLE_VOICES[selected_label]
 
 DEFAULT_NARRATOR_VOICE = "en-US-ChristopherNeural"
 
