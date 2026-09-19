@@ -1,6 +1,6 @@
 streamlit
 lxml
-edge-tts
 pydub
 audioop-lts
 pdfplumber
+fish-audio-sdk
