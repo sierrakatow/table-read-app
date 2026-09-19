@@ -1,18 +1,19 @@
 import streamlit as st
-import xml.etree.ElementTree as ET
+from lxml import etree
 import pdfplumber
 import asyncio
 import edge_tts
 import io
+import os
 import re
 from pydub import AudioSegment
 
 st.set_page_config(page_title="Table Read AI", page_icon="🎭", layout="centered")
 
 st.title("🎭 Multi-Voice Screenplay Table Read")
-st.write("Upload a 37-page TV script (.fdx or .pdf) to automatically assign voices and perform a full audio table read.")
+st.write("Upload a script (.fdx or .pdf) to automatically assign voices and perform a full audio table read.")
 
-# 1. Define hardcoded regular cast
+# 1. Hardcoded regular cast
 DEFAULT_VOICES = {
     "NARRATOR": "en-US-GuyNeural",
     "CHARLES": "en-GB-RyanNeural",
@@ -26,11 +27,10 @@ DEFAULT_VOICES = {
     "STEVE": "en-US-RogerNeural"
 }
 
-# 2. Available fallback voices for guest stars
+# Standard default Edge TTS voices
 AVAILABLE_VOICES = {
     "Male - US (Guy)": "en-US-GuyNeural",
     "Male - US (Christopher)": "en-US-ChristopherNeural",
-    "Male - US (Eric)": "en-US-EricNeural",
     "Male - UK (Ryan)": "en-GB-RyanNeural",
     "Male - AU (William)": "en-AU-WilliamNeural",
     "Female - US (Aria)": "en-US-AriaNeural",
@@ -44,30 +44,85 @@ DEFAULT_NARRATOR_VOICE = "en-US-ChristopherNeural"
 # --- HELPER PARSERS ---
 
 def parse_fdx(file_bytes):
-    """Parses Final Draft XML structure into sequential lines."""
-    tree = ET.ElementTree(ET.fromstring(file_bytes))
-    root = tree.getroot()
-    
+    """
+    Parses Final Draft XML structure into sequential lines.
+    Uses a recovering XML parser first, with a regex fallback for severely broken/truncated XML files.
+    """
     script_lines = []
-    current_speaker = None
-    
-    for element in root.findall(".//Element"):
-        element_type = element.get("Type")
-        text = "".join(element.itertext()).strip()
+    is_partial = False
+
+    # Check if the document was truncated near the end
+    if b'</FinalDraft>' not in file_bytes[-100:]:
+        is_partial = True
+
+    # Attempt 1: Recovering XML Parser (lxml)
+    try:
+        parser = etree.XMLParser(recover=True, encoding='utf-8')
+        root = etree.fromstring(file_bytes, parser=parser)
         
-        if not text:
-            continue
+        current_speaker = None
+        
+        # Support both standard Final Draft schemas (<Paragraph> and <Element>)
+        elements = root.xpath('.//Paragraph') or root.xpath('.//Element')
+        
+        for element in elements:
+            element_type = element.get("Type")
+            text_nodes = element.xpath('.//Text/text()') or element.xpath('.//text()')
+            text = "".join(text_nodes).strip()
             
-        if element_type == "Character":
-            current_speaker = re.sub(r'\s*\([^)]*\)', '', text).upper()
-        elif element_type == "Dialogue" and current_speaker:
-            script_lines.append({"speaker": current_speaker, "text": text})
-            current_speaker = None
-        elif element_type in ["Action", "Scene Heading"]:
-            script_lines.append({"speaker": "NARRATOR", "text": text})
-            current_speaker = None
+            if not text:
+                continue
+                
+            if element_type == "Character":
+                current_speaker = re.sub(r'\s*\([^)]*\)', '', text).upper()
+            elif element_type == "Dialogue" and current_speaker:
+                script_lines.append({"speaker": current_speaker, "text": text})
+                current_speaker = None
+            elif element_type in ["Action", "Scene Heading"]:
+                script_lines.append({"speaker": "NARRATOR", "text": text})
+                current_speaker = None
+
+        return script_lines, is_partial
+
+    except Exception:
+        # Attempt 2: Regex Fallback for severely broken XML strings
+        is_partial = True
+        content_str = file_bytes.decode('utf-8', errors='ignore')
+        
+        # Extract Paragraph/Element blocks
+        pattern = re.compile(
+            r'<(?:Paragraph|Element)[^>]*Type="(?P<type>[^"]+)"[^>]*>(.*?)(?=</(?:Paragraph|Element)>|<(?:Paragraph|Element)|$)', 
+            re.DOTALL
+        )
+        text_pattern = re.compile(r'<Text[^>]*>(.*?)</Text>', re.DOTALL)
+
+        current_speaker = None
+
+        for match in pattern.finditer(content_str):
+            element_type = match.group('type')
+            body = match.group(2)
             
-    return script_lines
+            # Extract internal text tags or fallback to strip tags
+            texts = text_pattern.findall(body)
+            if texts:
+                text = "".join(texts).strip()
+            else:
+                text = re.sub(r'<[^>]+>', '', body).strip()
+
+            if not text:
+                continue
+
+            if element_type == "Character":
+                current_speaker = re.sub(r'\s*\([^)]*\)', '', text).upper()
+            elif element_type == "Dialogue" and current_speaker:
+                script_lines.append({"speaker": current_speaker, "text": text})
+                current_speaker = None
+            elif element_type in ["Action", "Scene Heading"]:
+                script_lines.append({"speaker": "NARRATOR", "text": text})
+                current_speaker = None
+
+        return script_lines, is_partial
+
 
 def parse_pdf(file_bytes):
     """Basic heuristic parser for screenplay PDFs based on margins."""
@@ -86,7 +141,7 @@ def parse_pdf(file_bytes):
                 if not clean:
                     continue
                 
-                if clean.startswith(("INT.", "EXT.", "INT/EXT")) or (clean.isupper() and len(clean.split()) > 4):
+                if clean.startswith(("INT.", "EXT.", "INT/EXT")) or clean.isupper() and len(clean.split()) > 4:
                     script_lines.append({"speaker": "NARRATOR", "text": clean})
                     current_speaker = None
                 elif clean.isupper() and len(clean.split()) <= 4 and not clean.endswith(":"):
@@ -122,7 +177,7 @@ async def compile_table_read(script_lines, voice_assignments, progress_bar):
         try:
             audio_bytes = await generate_speech(text, voice)
             segment = AudioSegment.from_file(io.BytesIO(audio_bytes), format="mp3")
-            combined_audio += segment + AudioSegment.silent(duration=300)
+            combined_audio += segment + AudioSegment.silent(duration=300) # 300ms pause between lines
         except Exception as e:
             st.warning(f"Skipped line {idx+1} due to synthesis error: {e}")
             
@@ -140,57 +195,68 @@ if uploaded_file:
     file_bytes = uploaded_file.read()
     file_type = uploaded_file.name.split(".")[-1].lower()
     
+    is_partial_recovery = False
+
     with st.spinner("Parsing screenplay..."):
         if file_type == "fdx":
-            script_lines = parse_fdx(file_bytes)
+            script_lines, is_partial_recovery = parse_fdx(file_bytes)
         else:
             script_lines = parse_pdf(file_bytes)
 
     if not script_lines:
-        st.error("Could not extract any lines from this file. Please ensure it is a formatted script.")
+        st.error("Could not extract any lines from this file. Please ensure it is a valid script.")
     else:
-        st.success(f"Parsed {len(script_lines)} lines!")
-        
-        characters = sorted(list(set(l["speaker"] for l in script_lines if l["speaker"] != "NARRATOR")))
-        
-        st.subheader("🎙️ Voice Assignments")
-        st.info("Regular characters auto-lock to preset voices. Assign voices for guest characters below.")
-        
-        voice_assignments = {}
-        
-        # 1. Handle Narrator
-        if "NARRATOR" in DEFAULT_VOICES:
-            voice_assignments["NARRATOR"] = DEFAULT_VOICES["NARRATOR"]
-            st.write(f"🔒 **NARRATOR** → Locked to `{DEFAULT_VOICES['NARRATOR']}`")
+        if is_partial_recovery:
+            st.warning("⚠️ The uploaded .fdx file appears truncated or incomplete. Recovered as many valid lines as possible.")
         else:
-            selected_narrator = st.selectbox("Narrator Voice:", options=list(AVAILABLE_VOICES.keys()))
-            voice_assignments["NARRATOR"] = AVAILABLE_VOICES[selected_narrator]
+            st.success(f"Parsed {len(script_lines)} lines!")
+        
+        # Extract unique characters excluding Narrator
+        detected_characters = sorted(list(set(l["speaker"] for l in script_lines if l["speaker"] != "NARRATOR")))
+        
+        st.subheader("🎙️ Character Voice Assignments")
+        
+        assigned_voices = {}
 
-        # 2. Handle Character Voice Assignments
-        for char in characters:
-            char_upper = char.upper().strip()
+        # Narrator Selection
+        assigned_voices["NARRATOR"] = st.selectbox(
+            "Narrator (Action & Sluglines)", 
+            options=list(AVAILABLE_VOICES.values()),
+            format_func=lambda x: [k for k, v in AVAILABLE_VOICES.items() if v == x][0],
+            index=1
+        )
+        
+        # Dynamic Character Voice Matching
+        voice_options = list(AVAILABLE_VOICES.values())
+        for idx, character in enumerate(detected_characters):
+            char_upper = character.upper().strip()
             
+            # Check if character is in hardcoded DEFAULT_VOICES
             if char_upper in DEFAULT_VOICES:
-                voice_assignments[char] = DEFAULT_VOICES[char_upper]
-                st.write(f"🔒 **{char}** → Locked to `{DEFAULT_VOICES[char_upper]}`")
+                default_voice_code = DEFAULT_VOICES[char_upper]
+                assigned_voices[character] = default_voice_code
+                st.write(f"🔒 **{character}** → Automatically locked to `{default_voice_code}`")
             else:
-                selected_label = st.selectbox(
-                    f"Select voice for Guest Character: {char}",
-                    options=list(AVAILABLE_VOICES.keys()),
-                    key=f"voice_{char}"
+                default_voice_idx = (idx + 2) % len(voice_options)
+                assigned_voices[character] = st.selectbox(
+                    f"Select voice for {character}:",
+                    options=voice_options,
+                    format_func=lambda x: [k for k, v in AVAILABLE_VOICES.items() if v == x][0],
+                    index=default_voice_idx,
+                    key=f"voice_{character}"
                 )
-                voice_assignments[char] = AVAILABLE_VOICES[selected_label]
 
-        # Generate Button
+        # Generate Table Read
         if st.button("▶️ Generate Table Read"):
             progress_bar = st.progress(0.0)
             status_text = st.empty()
             status_text.text("Synthesizing character voices...")
             
+            # Run Async TTS in Event Loop
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             final_audio_bytes = loop.run_until_complete(
-                compile_table_read(script_lines, voice_assignments, progress_bar)
+                compile_table_read(script_lines, assigned_voices, progress_bar)
             )
             
             status_text.text("Table Read Ready!")
