@@ -259,23 +259,8 @@ if uploaded_file:
         assigned_voices = {}
 
         # Narrator Setup
-        # Look up which human-readable label matches DEFAULT_VOICES["NARRATOR"]
-        narrator_voice_default_id = DEFAULT_VOICES.get("NARRATOR")
-        options_labels = list(AVAILABLE_VOICES.keys())
-        
-        # Find the list index of that ID, fallback to 0 if not found
-        default_narrator_index = 0
-        for i, (label, v_id) in enumerate(AVAILABLE_VOICES.items()):
-            if v_id == narrator_voice_default_id:
-                default_narrator_index = i
-                break
-        
-        # Render the dropdown pre-selected to your default
-        narrator_label = st.selectbox(
-            "Narrator (Action & Sluglines)", 
-            options=options_labels,
-            index=default_narrator_index
-        )
+        assigned_voices["NARRATOR"] = DEFAULT_VOICES.get("NARRATOR")
+        st.write(f"🔒 **NARRATOR** → Locked to default model (`{DEFAULT_VOICES['NARRATOR'][:8]}`)")
 
         # Character Setup
         for idx, character in enumerate(detected_characters):
