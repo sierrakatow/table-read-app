@@ -4,51 +4,55 @@ import pdfplumber
 import asyncio
 import io
 import re
-from fishaudio import AsyncFishAudio
+import requests
 
 st.set_page_config(page_title="Table Read AI", page_icon="🎭", layout="centered")
 
 st.title("🎭 Multi-Voice Screenplay Table Read")
-st.write("Upload a script (.fdx or .pdf) to synthesize a multi-voice audio table read using Fish Audio.")
+st.write("Upload a script (.fdx or .pdf) to synthesize a multi-voice audio table read using ElevenLabs.")
 
 # --- API KEY MANAGEMENT ---
 st.sidebar.title("⚙️ Settings")
 api_key = st.sidebar.text_input(
-    "Fish Audio API Key", 
+    "ElevenLabs API Key", 
     type="password", 
-    value=st.secrets.get("FISH_API_KEY", "sk-fish-Y20xJ0DYokx1ID1UhOgpjsAcIFkyXHIFdfsG7OUTylg")
+    value=st.secrets.get("ELEVENLABS_API_KEY", "")
 )
 
 if not api_key:
-    st.sidebar.warning("⚠️ Enter your Fish Audio API key to enable speech generation.")
+    st.sidebar.warning("⚠️ Enter your ElevenLabs API key to enable speech generation.")
 
-# --- DEFAULT FISH AUDIO VOICE MODEL IDs ---
+# --- ELEVENLABS DEFAULT VOICE IDs ---
+# These are popular pre-made stock voices available on free & paid ElevenLabs accounts
 DEFAULT_VOICES = {
-    "NARRATOR": "0327fdb5da9e4fd782899a8058c8ae2b",
-    "CHARLES": "0f41db07117e46b39bc270043d0e48bf",
-    "LIZ": "933563129e564b19a115bedd57b7406a",
-    "MAX": "b5f4515fd395410b9ed3aef6fa51d9a0",
-    "EMMA": "fb43143e46f44cc6ad7d06230215bab6",
-    "JESSE": "04fc00f697174a778cc93b9ebc374b88",
-    "PHYLLIS": "06366bd48deb46d98e0df6160f798cb3",
-    "MORT": "04223913e8bc49aebdb01469d7a58713",
-    "HENRY": "50abc5fb921a4872908b2bf2ac735ab1"
+    "NARRATOR": "iP95p4xoKVk53GoZ742B",  # Chris
+    "CHARLES": "yhf80q1381zd2JJQ4tM7",   # Dominic
+    "LIZ": "r1KmysJdVYZjJCm4mL3b",       # Jessica
+    "MAX": "3svOJAOhuPHXwQC2H5eq",       # Brady J
+    "EMMA": "m3p6KEeXfVR68KjgMGgi",      # Veronica
+    "JESSE": "rHWSYoq8UlV0YIBKMryp",     # Jerry B
+    "PHYLLIS": "VdlAJiY20k9brfuVL9hQ",   # Diane
+    "MORT": "u5CLDuTTFBRqALkkuvtX",      # Felix
+    "HENRY": "3XOBzXhnDY98yeWQ3GdM",      # Brayden
+    "BENJI": "gyIv9PAQRvJjSZlk68oE"     #Darius
 }
 
 AVAILABLE_VOICES = {
-    "Narrator / Conversational Male": "9a9cf47702da476aa4629e2506d4a857",
-    "Dramatic Male": "80242207b5ec4310a08e67303e2e0136",
-    "Expressive Female": "651a24d5ff1a41869e99e2f9d5019053",
-    "Deep British Male": "3775f04a62144342894191a343469904"
+    "Rachel (Narrator / Calming Female)": "21m00Tcm4TlvDq8ikWAM",
+    "Adam (Deep Male)": "pNInz6obpgDQGcFmaJgB",
+    "Antoni (Well-Rounded Male)": "ErXwobaYiN019PkySvjV",
+    "Bella (Expressive Female)": "EXAVITQu4vr4xnSDxMaL",
+    "Arnold (Crisp / Authoritative)": "VR6AewLTigWG4xSOukaG",
+    "Domi (Strong / Energetic)": "AZnzlk1XvdvUeBnXmlld",
+    "Elli (Emotional / Young Female)": "MF3mGyEYCl7XYWbV9V6O",
+    "Josh (Deep / Conversational)": "TxGEqnscrfW365w6gLM3"
 }
 
 # --- HELPER PARSERS ---
 
 def clean_narrator_text(text):
     """Expands INT. and EXT. in sluglines to full words for clear audio synthesis."""
-    # Handle combined INT/EXT variations first
     text = re.sub(r'\bINT\.?\s*/\s*EXT\.?\b', 'INTERIOR/EXTERIOR', text, flags=re.IGNORECASE)
-    # Handle standalone INT. and EXT.
     text = re.sub(r'\bINT\.\b|\bINT\b', 'INTERIOR', text)
     text = re.sub(r'\bEXT\.\b|\bEXT\b', 'EXTERIOR', text)
     return text
@@ -174,38 +178,48 @@ def parse_pdf(file_bytes):
                     
     return script_lines
 
-# --- FISH AUDIO GENERATION LOGIC ---
+# --- ELEVENLABS GENERATION LOGIC ---
 
-async def generate_speech(client, text, reference_id):
-    """Generates MP3 audio buffer using Fish Audio Async SDK."""
-    # Option 1: Direct await (returns complete audio bytes)
-    audio_bytes = await client.tts.convert(
-        text=text,
-        reference_id=reference_id,
-        format="mp3",
-        latency="balanced"
-    )
-    return audio_bytes
+def generate_elevenlabs_speech(text, voice_id, api_key):
+    """Generates MP3 audio buffer using ElevenLabs REST API directly (fast & dependency-free)."""
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+    headers = {
+        "Accept": "audio/mpeg",
+        "Content-Type": "application/json",
+        "xi-api-key": api_key
+    }
+    payload = {
+        "text": text,
+        "model_id": "eleven_turbo_v2_5",  # Fastest & lowest-latency ElevenLabs model
+        "voice_settings": {
+            "stability": 0.5,
+            "similarity_boost": 0.75
+        }
+    }
+    
+    response = requests.post(url, json=payload, headers=headers)
+    if response.status_code == 200:
+        return response.content
+    else:
+        raise Exception(f"HTTP {response.status_code}: {response.text}")
 
 async def compile_table_read(script_lines, voice_assignments, api_key, progress_bar):
     """Generates audio for each line and stitches raw MP3 byte streams directly."""
     combined_audio = bytearray()
     total_lines = len(script_lines)
     
-    client = AsyncFishAudio(api_key=api_key)
-    
     for idx, line in enumerate(script_lines):
         speaker = line["speaker"]
         text = line["text"]
         
-        # Clean narrator sluglines before TTS conversion
         if speaker == "NARRATOR":
             text = clean_narrator_text(text)
             
-        voice_id = voice_assignments.get(speaker, AVAILABLE_VOICES["Narrator / Conversational Male"])
+        voice_id = voice_assignments.get(speaker, AVAILABLE_VOICES["Rachel (Narrator / Calming Female)"])
         
         try:
-            audio_bytes = await generate_speech(client, text, voice_id)
+            # ElevenLabs generation call
+            audio_bytes = generate_elevenlabs_speech(text, voice_id, api_key)
             combined_audio.extend(audio_bytes)
         except Exception as e:
             st.warning(f"Skipped line {idx+1} ({speaker}) due to synthesis error: {e}")
@@ -240,18 +254,18 @@ if uploaded_file:
         
         detected_characters = sorted(list(set(l["speaker"] for l in script_lines if l["speaker"] != "NARRATOR")))
         
-        st.subheader("🎙️ Character Voice Assignments (Fish Audio Model IDs)")
+        st.subheader("🎙️ Character Voice Assignments (ElevenLabs Voice IDs)")
         
         assigned_voices = {}
 
         # Narrator Setup
-        narrator_voice_default = DEFAULT_VOICES.get("NARRATOR", AVAILABLE_VOICES["Narrator / Conversational Male"])
+        narrator_voice_default = DEFAULT_VOICES.get("NARRATOR", AVAILABLE_VOICES["Rachel (Narrator / Calming Female)"])
         narrator_label = st.selectbox(
             "Narrator (Action & Sluglines)", 
             options=list(AVAILABLE_VOICES.keys()),
             index=0
         )
-        custom_narrator_id = st.text_input("Or paste custom Voice ID for Narrator (optional):", value="", key="custom_narrator")
+        custom_narrator_id = st.text_input("Or paste custom ElevenLabs Voice ID for Narrator (optional):", value="", key="custom_narrator")
         assigned_voices["NARRATOR"] = custom_narrator_id.strip() if custom_narrator_id.strip() else AVAILABLE_VOICES[narrator_label]
 
         # Character Setup
@@ -277,11 +291,11 @@ if uploaded_file:
         # Trigger Synthesis
         if st.button("▶️ Generate Table Read"):
             if not api_key:
-                st.error("Please provide a Fish Audio API key in the sidebar before generating.")
+                st.error("Please provide an ElevenLabs API key in the sidebar before generating.")
             else:
                 progress_bar = st.progress(0.0)
                 status_text = st.empty()
-                status_text.text("Synthesizing character voices with Fish Audio...")
+                status_text.text("Synthesizing character voices with ElevenLabs...")
                 
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
