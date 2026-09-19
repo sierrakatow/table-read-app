@@ -44,6 +44,15 @@ AVAILABLE_VOICES = {
 
 # --- HELPER PARSERS ---
 
+def clean_narrator_text(text):
+    """Expands INT. and EXT. in sluglines to full words for clear audio synthesis."""
+    # Handle combined INT/EXT variations first
+    text = re.sub(r'\bINT\.?\s*/\s*EXT\.?\b', 'INTERIOR/EXTERIOR', text, flags=re.IGNORECASE)
+    # Handle standalone INT. and EXT.
+    text = re.sub(r'\bINT\.\b|\bINT\b', 'INTERIOR', text)
+    text = re.sub(r'\bEXT\.\b|\bEXT\b', 'EXTERIOR', text)
+    return text
+
 def repair_truncated_xml(raw_bytes):
     """Attempts to fix incomplete XML by appending missing closing tags."""
     content = raw_bytes.decode('utf-8', errors='ignore')
@@ -189,6 +198,11 @@ async def compile_table_read(script_lines, voice_assignments, api_key, progress_
     for idx, line in enumerate(script_lines):
         speaker = line["speaker"]
         text = line["text"]
+        
+        # Clean narrator sluglines before TTS conversion
+        if speaker == "NARRATOR":
+            text = clean_narrator_text(text)
+            
         voice_id = voice_assignments.get(speaker, AVAILABLE_VOICES["Narrator / Conversational Male"])
         
         try:
