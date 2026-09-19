@@ -4,7 +4,6 @@ import pdfplumber
 import asyncio
 import edge_tts
 import io
-import os
 import re
 from pydub import AudioSegment
 
@@ -13,7 +12,7 @@ st.set_page_config(page_title="Table Read AI", page_icon="🎭", layout="centere
 st.title("🎭 Multi-Voice Screenplay Table Read")
 st.write("Upload a 37-page TV script (.fdx or .pdf) to automatically assign voices and perform a full audio table read.")
 
-# 1. Define your hardcoded regular cast
+# 1. Define hardcoded regular cast
 DEFAULT_VOICES = {
     "NARRATOR": "en-US-GuyNeural",
     "CHARLES": "en-GB-RyanNeural",
@@ -27,10 +26,11 @@ DEFAULT_VOICES = {
     "STEVE": "en-US-RogerNeural"
 }
 
-# Standard default Edge TTS voices
+# 2. Available fallback voices for guest stars
 AVAILABLE_VOICES = {
     "Male - US (Guy)": "en-US-GuyNeural",
     "Male - US (Christopher)": "en-US-ChristopherNeural",
+    "Male - US (Eric)": "en-US-EricNeural",
     "Male - UK (Ryan)": "en-GB-RyanNeural",
     "Male - AU (William)": "en-AU-WilliamNeural",
     "Female - US (Aria)": "en-US-AriaNeural",
@@ -38,29 +38,6 @@ AVAILABLE_VOICES = {
     "Female - UK (Sonia)": "en-GB-SoniaNeural",
     "Female - AU (Natasha)": "en-AU-NatashaNeural",
 }
-
-# 3. Dynamic UI logic inside Streamlit
-assigned_voices = {}
-
-st.subheader("Character Voice Assignments")
-
-for character in detected_characters:
-    # Normalize character name for matching
-    char_upper = character.upper().strip()
-    
-    # Check if character is hardcoded
-    if char_upper in DEFAULT_VOICES:
-        default_voice_code = DEFAULT_VOICES[char_upper]
-        assigned_voices[character] = default_voice_code
-        st.write(f"🔒 **{character}** → Automatically locked to `{default_voice_code}`")
-    else:
-        # Fallback to manual selection dropdown for guest stars
-        selected_label = st.selectbox(
-            f"Select voice for {character}:",
-            options=list(AVAILABLE_VOICES.keys()),
-            key=f"voice_{character}"
-        )
-        assigned_voices[character] = AVAILABLE_VOICES[selected_label]
 
 DEFAULT_NARRATOR_VOICE = "en-US-ChristopherNeural"
 
@@ -82,7 +59,6 @@ def parse_fdx(file_bytes):
             continue
             
         if element_type == "Character":
-            # Clean character extensions like (O.S.) or (V.O.)
             current_speaker = re.sub(r'\s*\([^)]*\)', '', text).upper()
         elif element_type == "Dialogue" and current_speaker:
             script_lines.append({"speaker": current_speaker, "text": text})
@@ -110,11 +86,9 @@ def parse_pdf(file_bytes):
                 if not clean:
                     continue
                 
-                # Detect Scene Headings / Action vs Dialogue
-                if clean.startswith(("INT.", "EXT.", "INT/EXT")) or clean.isupper() and len(clean.split()) > 4:
+                if clean.startswith(("INT.", "EXT.", "INT/EXT")) or (clean.isupper() and len(clean.split()) > 4):
                     script_lines.append({"speaker": "NARRATOR", "text": clean})
                     current_speaker = None
-                # All uppercase short string = Character name
                 elif clean.isupper() and len(clean.split()) <= 4 and not clean.endswith(":"):
                     current_speaker = re.sub(r'\s*\([^)]*\)', '', clean)
                 elif current_speaker:
@@ -148,7 +122,7 @@ async def compile_table_read(script_lines, voice_assignments, progress_bar):
         try:
             audio_bytes = await generate_speech(text, voice)
             segment = AudioSegment.from_file(io.BytesIO(audio_bytes), format="mp3")
-            combined_audio += segment + AudioSegment.silent(duration=300) # Add 300ms pause between lines
+            combined_audio += segment + AudioSegment.silent(duration=300)
         except Exception as e:
             st.warning(f"Skipped line {idx+1} due to synthesis error: {e}")
             
@@ -177,32 +151,35 @@ if uploaded_file:
     else:
         st.success(f"Parsed {len(script_lines)} lines!")
         
-        # Extract unique characters
         characters = sorted(list(set(l["speaker"] for l in script_lines if l["speaker"] != "NARRATOR")))
         
         st.subheader("🎙️ Voice Assignments")
-        st.info("Assign a unique voice for each character in your episode.")
+        st.info("Regular characters auto-lock to preset voices. Assign voices for guest characters below.")
         
         voice_assignments = {}
         
-        # Assign Narrator Voice
-        voice_assignments["NARRATOR"] = st.selectbox(
-            "Narrator (Action & Sluglines)", 
-            options=list(AVAILABLE_VOICES.values()),
-            format_func=lambda x: [k for k, v in AVAILABLE_VOICES.items() if v == x][0],
-            index=1
-        )
-        
-        # Assign Character Voices
-        voice_options = list(AVAILABLE_VOICES.values())
-        for idx, char in enumerate(characters):
-            default_voice_idx = (idx + 2) % len(voice_options)
-            voice_assignments[char] = st.selectbox(
-                f"Character: {char}",
-                options=voice_options,
-                format_func=lambda x: [k for k, v in AVAILABLE_VOICES.items() if v == x][0],
-                index=default_voice_idx
-            )
+        # 1. Handle Narrator
+        if "NARRATOR" in DEFAULT_VOICES:
+            voice_assignments["NARRATOR"] = DEFAULT_VOICES["NARRATOR"]
+            st.write(f"🔒 **NARRATOR** → Locked to `{DEFAULT_VOICES['NARRATOR']}`")
+        else:
+            selected_narrator = st.selectbox("Narrator Voice:", options=list(AVAILABLE_VOICES.keys()))
+            voice_assignments["NARRATOR"] = AVAILABLE_VOICES[selected_narrator]
+
+        # 2. Handle Character Voice Assignments
+        for char in characters:
+            char_upper = char.upper().strip()
+            
+            if char_upper in DEFAULT_VOICES:
+                voice_assignments[char] = DEFAULT_VOICES[char_upper]
+                st.write(f"🔒 **{char}** → Locked to `{DEFAULT_VOICES[char_upper]}`")
+            else:
+                selected_label = st.selectbox(
+                    f"Select voice for Guest Character: {char}",
+                    options=list(AVAILABLE_VOICES.keys()),
+                    key=f"voice_{char}"
+                )
+                voice_assignments[char] = AVAILABLE_VOICES[selected_label]
 
         # Generate Button
         if st.button("▶️ Generate Table Read"):
@@ -210,7 +187,6 @@ if uploaded_file:
             status_text = st.empty()
             status_text.text("Synthesizing character voices...")
             
-            # Run Async TTS in Event Loop
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             final_audio_bytes = loop.run_until_complete(
