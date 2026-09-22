@@ -9,7 +9,7 @@ import requests
 st.set_page_config(page_title="Table Read AI", page_icon="🎭", layout="centered")
 
 st.title("🎭 Multi-Voice Screenplay Table Read")
-st.write("Upload a script (.fdx or .pdf) to synthesize a multi-voice audio table read using ElevenLabs.")
+st.write("Upload a script (.fdx) to synthesize a multi-voice audio table read using ElevenLabs.")
 
 # --- API KEY MANAGEMENT ---
 api_key = st.secrets.get("ELEVENLABS_API_KEY", "")
