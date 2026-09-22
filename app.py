@@ -222,7 +222,7 @@ async def compile_table_read(script_lines, voice_assignments, api_key, progress_
 
 # --- APP INTERFACE ---
 
-uploaded_file = st.file_uploader("Upload Screenplay (.fdx or .pdf)", type=["fdx", "pdf"])
+uploaded_file = st.file_uploader("Upload Screenplay (.fdx)", type=["fdx"])
 
 if uploaded_file:
     file_bytes = uploaded_file.read()
