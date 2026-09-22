@@ -6,9 +6,9 @@ import io
 import re
 import requests
 
-st.set_page_config(page_title="EY Script Table Read", page_icon="🧛", layout="centered")
+st.set_page_config(page_title="EY Script Reader", page_icon="🧛", layout="centered")
 
-st.title("🧛 EY Script Table Read")
+st.title("🧛 EY Script Reader")
 st.write("Upload a script (.fdx) to synthesize a multi-voice audio table read using ElevenLabs.")
 
 # --- API KEY MANAGEMENT ---
