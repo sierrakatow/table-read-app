@@ -44,9 +44,15 @@ AVAILABLE_VOICES = {
 
 def clean_narrator_text(text):
     """Expands INT. and EXT. in sluglines to full words for clear audio synthesis."""
+    # 1. Handle combined INT/EXT or INT./EXT. (case-insensitive)
     text = re.sub(r'\bINT\.?\s*/\s*EXT\.?\b', 'INTERIOR/EXTERIOR', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bINT\.\b|\bINT\b', 'INTERIOR', text)
-    text = re.sub(r'\bEXT\.\b|\bEXT\b', 'EXTERIOR', text)
+    
+    # 2. Handle standalone INT. or INT (case-insensitive)
+    text = re.sub(r'\bINT\.?\b', 'INTERIOR', text, flags=re.IGNORECASE)
+    
+    # 3. Handle standalone EXT. or EXT (case-insensitive)
+    text = re.sub(r'\bEXT\.?\b', 'EXTERIOR', text, flags=re.IGNORECASE)
+    
     return text
 
 def repair_truncated_xml(raw_bytes):
