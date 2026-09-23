@@ -21,7 +21,7 @@ DEFAULT_VOICES = {
     "CHARLES": "yhf80q1381zd2JJQ4tM7",   # Dominic
     "LIZ": "r1KmysJdVYZjJCm4mL3b",       # Jessica
     "MAX": "3svOJAOhuPHXwQC2H5eq",       # Brady J
-    "EMMA": "m3p6KEeXfVR68KjgMGgi",      # Veronica
+    "EMMA": "gJx1vCzNCD1EQHT212Ls",      # Ava
     "JESSE": "rHWSYoq8UlV0YIBKMryp",     # Jerry B
     "PHYLLIS": "VdlAJiY20k9brfuVL9hQ",   # Diane
     "MORT": "u5CLDuTTFBRqALkkuvtX",      # Felix
