@@ -72,19 +72,23 @@ def repair_truncated_xml(raw_bytes):
 
 
 def parse_fdx(file_bytes):
-    """Parses Final Draft XML structure into sequential lines."""
+    """
+    Parses Final Draft XML structure into sequential lines.
+    Converts beat/pause parentheticals into SSML <break> tags for ElevenLabs.
+    """
     script_lines = []
     is_partial = False
 
     if b'</FinalDraft>' not in file_bytes[-100:]:
         is_partial = True
 
-    try:
-        repaired_bytes = repair_truncated_xml(file_bytes)
-        root = ET.fromstring(repaired_bytes)
-        
+    # Parentheticals that trigger a pause
+    PAUSE_WORDS = {"then", "beat"}
+
+    def process_elements(elements):
+        lines = []
         current_speaker = None
-        elements = root.findall(".//Paragraph") or root.findall(".//Element")
+        pending_pause = False
         
         for element in elements:
             element_type = element.get("Type")
@@ -95,14 +99,38 @@ def parse_fdx(file_bytes):
                 
             if element_type == "Character":
                 current_speaker = re.sub(r'\s*\([^)]*\)', '', text).upper()
+                pending_pause = False
+                
+            elif element_type == "Parenthetical":
+                clean_p = text.strip("()").lower()
+                # If parenthetical matches beat/then, flag for a pause
+                if clean_p in PAUSE_WORDS:
+                    pending_pause = True
+                continue
+                
             elif element_type == "Dialogue" and current_speaker:
-                script_lines.append({"speaker": current_speaker, "text": text})
+                pause_tag = ' <break time="1.0s" /> ' if pending_pause else ""
+                
+                # If continuing dialogue from the same speaker, append with optional pause
+                if lines and lines[-1]["speaker"] == current_speaker:
+                    lines[-1]["text"] += f"{pause_tag}{text}"
+                else:
+                    lines.append({"speaker": current_speaker, "text": f"{pause_tag}{text}".strip()})
+                    
+                pending_pause = False  # Reset flag
+                
+            elif element_type in ["Action", "Scene Heading", "Transition", "New Act", "End of Act"]:
+                lines.append({"speaker": "NARRATOR", "text": text})
                 current_speaker = None
-            elif element_type in ["Action", "Scene Heading"]:
-                script_lines.append({"speaker": "NARRATOR", "text": text})
-                current_speaker = None
+                pending_pause = False
+                
+        return lines
 
-        return script_lines, is_partial
+    try:
+        repaired_bytes = repair_truncated_xml(file_bytes)
+        root = ET.fromstring(repaired_bytes)
+        elements = root.findall(".//Paragraph") or root.findall(".//Element")
+        return process_elements(elements), is_partial
 
     except Exception:
         is_partial = True
@@ -114,31 +142,23 @@ def parse_fdx(file_bytes):
         )
         text_pattern = re.compile(r'<Text[^>]*>(.*?)</Text>', re.DOTALL)
 
-        current_speaker = None
-
+        raw_elements = []
         for match in pattern.finditer(content_str):
             element_type = match.group('type')
             body = match.group(2)
-            
             texts = text_pattern.findall(body)
-            if texts:
-                text = "".join(texts).strip()
-            else:
-                text = re.sub(r'<[^>]+>', '', body).strip()
+            text = "".join(texts).strip() if texts else re.sub(r'<[^>]+>', '', body).strip()
+            
+            class DummyElem:
+                def __init__(self, t, txt):
+                    self.t = t
+                    self.txt = txt
+                def get(self, k): return self.t
+                def itertext(self): return [self.txt]
 
-            if not text:
-                continue
+            raw_elements.append(DummyElem(element_type, text))
 
-            if element_type == "Character":
-                current_speaker = re.sub(r'\s*\([^)]*\)', '', text).upper()
-            elif element_type == "Dialogue" and current_speaker:
-                script_lines.append({"speaker": current_speaker, "text": text})
-                current_speaker = None
-            elif element_type in ["Action", "Scene Heading"]:
-                script_lines.append({"speaker": "NARRATOR", "text": text})
-                current_speaker = None
-
-        return script_lines, is_partial
+        return process_elements(raw_elements), is_partial
 
 
 def parse_pdf(file_bytes):
@@ -252,7 +272,7 @@ if uploaded_file:
 
         # Narrator Setup
         assigned_voices["NARRATOR"] = DEFAULT_VOICES.get("NARRATOR")
-        st.write(f"🔒 **NARRATOR** → Locked to default model (`{DEFAULT_VOICES['NARRATOR'][:8]}`)")
+        st.write(f"🔒 **NARRATOR** → Locked to default voice (`{DEFAULT_VOICES['NARRATOR'][:8]}`)")
 
         # Character Setup
         for idx, character in enumerate(detected_characters):
@@ -260,7 +280,7 @@ if uploaded_file:
             
             if char_upper in DEFAULT_VOICES:
                 assigned_voices[character] = DEFAULT_VOICES[char_upper]
-                st.write(f"🔒 **{character}** → Locked to default model `{DEFAULT_VOICES[char_upper][:8]}...`")
+                st.write(f"🔒 **{character}** → Locked to default voice `{DEFAULT_VOICES[char_upper][:8]}...`")
             else:
                 selected_label = st.selectbox(
                     f"Select voice for {character}:",
@@ -277,7 +297,7 @@ if uploaded_file:
         # Trigger Synthesis
         if st.button("▶️ Generate Table Read"):
             if not api_key:
-                st.error("Please provide an ElevenLabs API key in the sidebar before generating.")
+                st.error("Missing ElevenLabs API key. Notify Sierra.")
             else:
                 progress_bar = st.progress(0.0)
                 status_text = st.empty()
